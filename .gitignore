@@ -1,0 +1,22 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+*.swp
+
+# Python packaging
+__pycache__/
+*.py[cod]
+.pytest_cache/
+python/build/
+python/dist/
+python/*.egg-info/
+python/src/*.egg-info/
+
+# Database files (user-supplied, never committed)
+/ham0/
+/HAMCALL/
+
+# IDE
+.idea/
+.vscode/

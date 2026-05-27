@@ -1,0 +1,94 @@
+name: Python Wheels
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/python-wheels.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "python/**"
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            archs: x86_64
+            artifact: wheels-linux-x86_64
+            macos_target: ""
+          - os: ubuntu-latest
+            archs: aarch64
+            artifact: wheels-linux-aarch64
+            macos_target: ""
+          - os: macos-14
+            archs: arm64
+            artifact: wheels-macos-aarch64
+            macos_target: "11.0"
+          - os: macos-15-intel
+            archs: x86_64
+            artifact: wheels-macos-x86_64
+            macos_target: "10.12"
+          - os: windows-latest
+            archs: AMD64
+            artifact: wheels-windows-x86_64
+            macos_target: ""
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable Linux aarch64 emulation
+        if: matrix.archs == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v3.4.1
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.archs }}
+          CIBW_BUILD: cp39-*
+          CIBW_SKIP: "pp* *-musllinux_*"
+          CIBW_BEFORE_ALL_LINUX: >
+            curl https://sh.rustup.rs -sSf |
+            sh -s -- -y --profile minimal
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          CIBW_ENVIRONMENT_MACOS: 'MACOSX_DEPLOYMENT_TARGET="${{ matrix.macos_target }}"'
+          CIBW_TEST_COMMAND: python -m unittest discover -s {package}/tests
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: Publish Python wheels
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: Attach wheels to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wheelhouse/*.whl

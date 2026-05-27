@@ -1,0 +1,127 @@
+name: Native Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: callbook-linux-x86_64
+            library: libcallbook.so
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: callbook-linux-aarch64
+            library: libcallbook.so
+            archive: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: callbook-macos-aarch64
+            library: libcallbook.dylib
+            archive: tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: callbook-macos-x86_64
+            library: libcallbook.dylib
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: callbook-windows-x86_64
+            library: callbook.dll
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Build shared library and CLI
+        run: cargo build --release -p callbook-rs --features cli --target ${{ matrix.target }}
+
+      - name: Stage Unix artifacts
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="target/${{ matrix.target }}/release"
+          stage="dist/${{ matrix.artifact }}"
+          mkdir -p "$stage"
+          cp "$out/${{ matrix.library }}" "$stage/"
+          cp "$out/callbook" "$stage/"
+          cp crates/callbook/include/callbook.h "$stage/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$stage/"
+          tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
+          (cd dist && shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256")
+
+      - name: Stage Windows artifacts
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $out = "target/${{ matrix.target }}/release"
+          $stage = "dist/${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "$out/${{ matrix.library }}" "$stage/"
+          Copy-Item "$out/callbook.exe" "$stage/"
+          if (Test-Path "$out/callbook.dll.lib") { Copy-Item "$out/callbook.dll.lib" "$stage/" }
+          if (Test-Path "$out/callbook.lib") { Copy-Item "$out/callbook.lib" "$stage/" }
+          Copy-Item "crates/callbook/include/callbook.h" "$stage/"
+          Copy-Item "README.md", "LICENSE-MIT", "LICENSE-APACHE" "$stage/"
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/${{ matrix.artifact }}.zip" -Force
+          $hash = (Get-FileHash "dist/${{ matrix.artifact }}.zip" -Algorithm SHA256).Hash.ToLower()
+          $checksum = "$hash  ${{ matrix.artifact }}.zip`n"
+          [System.IO.File]::WriteAllText("dist/${{ matrix.artifact }}.zip.sha256", $checksum, [System.Text.UTF8Encoding]::new($false))
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}.${{ matrix.archive }}
+            dist/${{ matrix.artifact }}.${{ matrix.archive }}.sha256
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true

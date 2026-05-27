@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Check CLI
+        run: cargo check -p callbook-rs --features cli --bin callbook
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Docs
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo doc -p callbook-rs --no-deps
+
+      - name: Install cargo-audit
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Audit dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo audit
+
+      - name: Check C header syntax
+        if: matrix.os != 'windows-latest'
+        run: cc -fsyntax-only -x c crates/callbook/include/callbook.h
+
+      - name: Smoke test C ABI
+        if: matrix.os != 'windows-latest'
+        run: scripts/smoke_c_abi.sh
+
+      - name: Smoke test Python package
+        if: matrix.os != 'windows-latest'
+        run: scripts/smoke_python_package.sh
+
+      - uses: actions/setup-python@v6
+        if: matrix.os == 'windows-latest'
+        with:
+          python-version: '3.x'
+
+      - name: Smoke test Python package
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $venv = Join-Path $env:RUNNER_TEMP "callbook-python-smoke"
+          python -m venv $venv
+          $python = Join-Path $venv "Scripts/python.exe"
+          & $python -m pip install .\python
+          & $python -m unittest discover -s python\tests
+          & $python -c "import callbook_rs; from callbook_rs import CallBook; print(callbook_rs.__version__); print(CallBook.__name__)"
