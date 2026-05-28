@@ -59,7 +59,10 @@ jobs:
 
       - name: Check C header syntax
         if: matrix.os != 'windows-latest'
-        run: cc -fsyntax-only -x c crates/callbook/include/callbook.h
+        shell: bash
+        run: |
+          printf '#include "callbook.h"\n' > /tmp/callbook-header-check.c
+          cc -fsyntax-only -I crates/callbook/include /tmp/callbook-header-check.c
 
       - name: Smoke test C ABI
         if: matrix.os != 'windows-latest'
